@@ -24,6 +24,8 @@ skel_path = args[0]
 for img in list(bpy.data.images):
     bpy.data.images.remove(img)
 
+import math
+
 import cv2
 import bmesh
 
@@ -60,7 +62,26 @@ def pixel_to_blender_coords(pixel_coords, image_height, scale_factor=0.1):
 
 
 def create_wall_from_path(path, wall_height=3.0, wall_thickness=0.2, name="Wall"):
-    """Extrude a path of points into a quad-faced wall mesh."""
+    """Build one rectangular box per edge of the path.
+
+    The previous version built a single zero-thickness ribbon down the
+    whole path and tried to give it depth with inset_region. That
+    insets *within* the face's own plane, so the wall stayed paper-thin
+    and was invisible edge-on from directly above - confirmed by
+    actually rendering it in Blender: a top-down shot came back a flat
+    uniform gray with zero geometry visible, because every wall quad's
+    surface normal was horizontal and the camera was looking straight
+    down it. Swapping inset_region for bmesh.ops.solidify was the
+    obvious next fix, but it extrudes along face normals assuming a
+    continuous shell - a path with sharp turns isn't one, and the
+    miter math at each turn blew up into long spikes reaching off the
+    edge of the render.
+
+    Building each edge as its own independent box sidesteps both
+    problems: no miter join, no shared-normal assumption, at the cost
+    of small gaps/overlaps at corners, which don't matter at
+    floor-plan scale.
+    """
     if len(path) < 2:
         return None
 
@@ -69,15 +90,34 @@ def create_wall_from_path(path, wall_height=3.0, wall_thickness=0.2, name="Wall"
     bpy.context.collection.objects.link(obj)
 
     bm = bmesh.new()
-    bottom_verts = [bm.verts.new((p[0], p[1], p[2])) for p in path]
-    top_verts = [bm.verts.new((p[0], p[1], p[2] + wall_height)) for p in path]
-    bm.verts.ensure_lookup_table()
+    half_thickness = wall_thickness / 2
 
-    for i in range(len(path) - 1):
-        bm.faces.new([bottom_verts[i], bottom_verts[i + 1], top_verts[i + 1], top_verts[i]])
+    for (x1, y1, z1), (x2, y2, z2) in zip(path, path[1:]):
+        dx, dy = x2 - x1, y2 - y1
+        length = math.hypot(dx, dy)
+        if length == 0:
+            continue
+        # unit vector perpendicular to the segment, in the XY plane
+        nx, ny = -dy / length, dx / length
 
-    if wall_thickness > 0:
-        bmesh.ops.inset_region(bm, faces=bm.faces[:], thickness=wall_thickness / 2)
+        bottom = [
+            (x1 + nx * half_thickness, y1 + ny * half_thickness, z1),
+            (x2 + nx * half_thickness, y2 + ny * half_thickness, z2),
+            (x2 - nx * half_thickness, y2 - ny * half_thickness, z2),
+            (x1 - nx * half_thickness, y1 - ny * half_thickness, z1),
+        ]
+        top = [(x, y, z + wall_height) for x, y, z in bottom]
+
+        bv = [bm.verts.new(c) for c in bottom]
+        tv = [bm.verts.new(c) for c in top]
+
+        bm.faces.new([bv[0], bv[1], bv[2], bv[3]])  # floor
+        bm.faces.new([tv[3], tv[2], tv[1], tv[0]])  # ceiling
+        for a, b in ((0, 1), (1, 2), (2, 3), (3, 0)):  # four side walls
+            bm.faces.new([bv[a], bv[b], tv[b], tv[a]])
+
+    bm.normal_update()
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-4)
 
     bm.to_mesh(mesh)
     bm.free()
