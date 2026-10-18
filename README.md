@@ -11,14 +11,21 @@ in Blender.
 
 ## Every stage, in order
 
+The 2D stage outputs are small - they're native resolution for this
+example floor plan (196x209px), not thumbnails of something bigger.
+The Blender renders are their own, larger resolution. Both are shown
+at a fixed display width below so the table reads consistently; the
+files in `examples/expected_output/` are untouched, full-resolution
+output.
+
 | | | |
 |---|---|---|
 | **Input** | **Binarized (`step1`)** | **Convolution / gap-fill (`step2`)** |
-| ![input](examples/simple_blueprint.png) | ![mask](examples/expected_output/mask.png) | ![clean mask](examples/expected_output/clean_mask.png) |
+| <img src="examples/simple_blueprint.png" width="220"> | <img src="examples/expected_output/mask.png" width="220"> | <img src="examples/expected_output/clean_mask.png" width="220"> |
 | **Skeleton (`step3`)** | **Vector projections (`step4`)** | **Re-skeletonized (`step5`)** |
-| ![skeleton](examples/expected_output/first_skeleton.png) | ![merged vectors](examples/expected_output/step4_extended_overlay.png) | ![final skeleton](examples/expected_output/final_skeleton.png) |
+| <img src="examples/expected_output/first_skeleton.png" width="220"> | <img src="examples/expected_output/step4_extended_overlay.png" width="220"> | <img src="examples/expected_output/final_skeleton.png" width="220"> |
 | **Blender, top-down** | **Blender, angled (`step6`)** | |
-| ![top-down](examples/expected_output/preview_top.png) | ![3d](examples/expected_output/preview_3d.png) | |
+| <img src="examples/expected_output/preview_top.png" width="220"> | <img src="examples/expected_output/preview_3d.png" width="220"> | |
 
 Every image above is real output from an actual run of this exact
 code against `examples/simple_blueprint.png`, not mocked up
