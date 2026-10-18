@@ -6,7 +6,19 @@ environment (and are not installable with pip):
 
     blender --python step6.py -- <path-to-final_skeleton.png>
 
-So far: find wall paths as contours in the skeleton image.
+What it does:
+1. Clears the default scene (cube, camera, light) so only the
+   generated walls remain.
+2. Finds wall paths as contours in the skeleton image.
+3. Converts pixel coordinates to Blender world coordinates (flips the
+   Y axis, since image-space Y grows downward and Blender's grows
+   upward).
+4. Extrudes each wall path into a solid mesh with real height and
+   thickness, using bmesh.
+
+A second approach (create_walls_with_curves) builds the same walls as
+beveled curves instead of raw meshes, which bends more cleanly around
+corners - left in as an alternative, not wired up by default.
 """
 
 import sys
@@ -147,3 +159,37 @@ def create_walls_from_skeleton(skeleton_image_path, wall_height=3.0, wall_thickn
 
 if __name__ == "__main__":
     create_walls_from_skeleton(skel_path, wall_height=3.0, wall_thickness=0.2, scale_factor=0.05)
+
+
+def create_walls_with_curves(skeleton_image_path, wall_height=3.0, wall_thickness=0.2, scale_factor=0.1):
+    """Alternative: build walls as beveled curves instead of raw meshes.
+
+    Not called by default - swap it in below if you want rounder
+    corners instead of the box builder's mitred joints.
+    """
+    clear_scene()
+
+    skel_img = cv2.imread(skeleton_image_path, cv2.IMREAD_GRAYSCALE)
+    image_height = skel_img.shape[0]
+    wall_paths = extract_wall_paths(skeleton_image_path)
+
+    for i, wpath in enumerate(wall_paths):
+        if len(wpath) < 2:
+            continue
+
+        blender_path = pixel_to_blender_coords(wpath, image_height, scale_factor)
+
+        curve_data = bpy.data.curves.new(f"WallCurve_{i + 1:03d}", "CURVE")
+        curve_data.dimensions = "3D"
+
+        spline = curve_data.splines.new("POLY")
+        spline.points.add(len(blender_path) - 1)
+        for j, point in enumerate(blender_path):
+            spline.points[j].co = (point[0], point[1], point[2], 1.0)
+
+        curve_obj = bpy.data.objects.new(f"Wall_{i + 1:03d}", curve_data)
+        bpy.context.collection.objects.link(curve_obj)
+
+        curve_data.bevel_depth = wall_thickness / 2
+        curve_data.bevel_resolution = 2
+        curve_data.extrude = wall_height
