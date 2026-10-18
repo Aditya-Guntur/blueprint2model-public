@@ -43,7 +43,10 @@ def extract_and_merge_segments(skel_path: str, out_path: str = "extended_paralle
         minLineLength=MIN_LINE_LEN,
         maxLineGap=MAX_LINE_GAP,
     )
-    lines = [tuple(l[0]) for l in raw] if raw is not None else []
+    # OpenCV <5 returns shape (N, 1, 4); OpenCV 5.x returns (N, 4) directly -
+    # reshape(-1, 4) normalizes either one to a flat list of (x1, y1, x2, y2)
+    # instead of silently iterating single ints on the new shape.
+    lines = [tuple(int(v) for v in l) for l in raw.reshape(-1, 4)] if raw is not None else []
 
     extended = [_extend_segment(seg, EXT_PIXELS) for seg in lines]
 
