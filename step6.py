@@ -1,4 +1,4 @@
-"""Stage 6: build a 3D wall mesh from the final wall skeleton.
+"""Stage 6: build a 3D wall mesh from stage 4's merged wall segments.
 
 This stage runs *inside* Blender's embedded Python, not the system
 interpreter - it imports bpy/bmesh, which only exist in that
@@ -9,21 +9,42 @@ environment (and are not installable with pip):
 What it does:
 1. Clears the default scene (cube, camera, light) so only the
    generated walls remain.
-2. Finds wall paths as contours in the skeleton image.
-3. Converts pixel coordinates to Blender world coordinates (flips the
-   Y axis, since image-space Y grows downward and Blender's grows
-   upward).
-4. Extrudes each wall path into a solid mesh with real height and
+2. Loads wall_segments.json (written by stage 4, in the same
+   directory as the skeleton image) - the exact merged axis-aligned
+   wall vectors, as data, not an image to be re-parsed.
+3. Converts each segment's pixel coordinates to Blender world
+   coordinates (flips the Y axis, since image-space Y grows downward
+   and Blender's grows upward).
+4. Extrudes each segment into a solid mesh with real height and
    thickness, using bmesh.
 
-A second approach (create_walls_with_curves) builds the same walls as
-beveled curves instead of raw meshes, which bends more cleanly around
-corners - left in as an alternative, not wired up by default.
+An earlier version re-derived wall paths by running
+cv2.findContours + approxPolyDP on the skeleton image instead of using
+stage 4's segment data directly. That looked reasonable in every 2D
+preview image, but cv2.findContours is built to trace the boundary of
+a filled region, not a 1px-wide open skeleton line: on a thin line it
+walks up one side and back down the other, and approxPolyDP
+simplification could then insert a spurious diagonal shortcut between
+that "there" and "back" traversal at a branch point - invisible in any
+of the flat 2D stage images, but very visible as an extra diagonal
+wall once extruded into 3D. Consuming stage 4's segments directly
+removes the raster round-trip (and the cv2 dependency inside Blender)
+entirely, instead of trying to patch around what findContours does
+with thin lines.
+
+A second wall-building approach (create_walls_with_curves) builds the
+same segments as beveled curves instead of raw meshes, which bends
+more cleanly around corners - left in as an alternative, not wired up
+by default.
 """
 
+import json
+import math
+import os
 import sys
 
 import bpy
+import bmesh
 
 args = sys.argv[sys.argv.index("--") + 1:]
 if not args:
@@ -36,11 +57,6 @@ skel_path = args[0]
 for img in list(bpy.data.images):
     bpy.data.images.remove(img)
 
-import math
-
-import cv2
-import bmesh
-
 
 def clear_scene():
     """Remove every object from the current scene."""
@@ -48,19 +64,19 @@ def clear_scene():
     bpy.ops.object.delete(use_global=False, confirm=False)
 
 
-def extract_wall_paths(skeleton_image_path):
-    """Find wall segments as simplified contours in the skeleton image."""
-    skel_img = cv2.imread(skeleton_image_path, cv2.IMREAD_GRAYSCALE)
-    contours, _ = cv2.findContours(skel_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    wall_paths = []
-    for contour in contours:
-        epsilon = 0.02 * cv2.arcLength(contour, True)
-        simplified = cv2.approxPolyDP(contour, epsilon, False)
-        points = [tuple(point[0]) for point in simplified]
-        if len(points) > 1:
-            wall_paths.append(points)
-    return wall_paths
+def load_wall_segments(skeleton_image_path):
+    """Load stage 4's merged wall segments from wall_segments.json,
+    which lives next to the skeleton image. Returns
+    (image_height, [(x1, y1, x2, y2), ...])."""
+    segments_path = os.path.join(os.path.dirname(os.path.abspath(skeleton_image_path)), "wall_segments.json")
+    if not os.path.isfile(segments_path):
+        raise FileNotFoundError(
+            f"No wall_segments.json next to {skeleton_image_path} - "
+            "run stage 4 (step4.extract_and_merge_segments) first."
+        )
+    with open(segments_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data["image_height"], [tuple(seg) for seg in data["segments"]]
 
 
 def pixel_to_blender_coords(pixel_coords, image_height, scale_factor=0.1):
@@ -76,7 +92,7 @@ def pixel_to_blender_coords(pixel_coords, image_height, scale_factor=0.1):
 def create_wall_from_path(path, wall_height=3.0, wall_thickness=0.2, name="Wall"):
     """Build one rectangular box per edge of the path.
 
-    The previous version built a single zero-thickness ribbon down the
+    An earlier version built a single zero-thickness ribbon down the
     whole path and tried to give it depth with inset_region. That
     insets *within* the face's own plane, so the wall stayed paper-thin
     and was invisible edge-on from directly above - confirmed by
@@ -137,28 +153,18 @@ def create_wall_from_path(path, wall_height=3.0, wall_thickness=0.2, name="Wall"
 
 
 def create_walls_from_skeleton(skeleton_image_path, wall_height=3.0, wall_thickness=0.2, scale_factor=0.1):
-    """Build a wall mesh object per wall path found in the skeleton."""
+    """Build one wall mesh object per merged segment in wall_segments.json."""
     clear_scene()
 
-    skel_img = cv2.imread(skeleton_image_path, cv2.IMREAD_GRAYSCALE)
-    if skel_img is None:
-        print(f"Could not load image: {skeleton_image_path}")
-        return
+    image_height, segments = load_wall_segments(skeleton_image_path)
+    print(f"Loaded {len(segments)} wall segments")
 
-    image_height = skel_img.shape[0]
-    wall_paths = extract_wall_paths(skeleton_image_path)
-    print(f"Found {len(wall_paths)} wall segments")
-
-    for i, wpath in enumerate(wall_paths):
-        blender_path = pixel_to_blender_coords(wpath, image_height, scale_factor)
+    for i, (x1, y1, x2, y2) in enumerate(segments):
+        blender_path = pixel_to_blender_coords([(x1, y1), (x2, y2)], image_height, scale_factor)
         wall_name = f"Wall_{i + 1:03d}"
         wall_obj = create_wall_from_path(blender_path, wall_height, wall_thickness, wall_name)
         if wall_obj:
-            print(f"Created {wall_name} with {len(wpath)} points")
-
-
-if __name__ == "__main__":
-    create_walls_from_skeleton(skel_path, wall_height=3.0, wall_thickness=0.2, scale_factor=0.05)
+            print(f"Created {wall_name}")
 
 
 def create_walls_with_curves(skeleton_image_path, wall_height=3.0, wall_thickness=0.2, scale_factor=0.1):
@@ -169,15 +175,10 @@ def create_walls_with_curves(skeleton_image_path, wall_height=3.0, wall_thicknes
     """
     clear_scene()
 
-    skel_img = cv2.imread(skeleton_image_path, cv2.IMREAD_GRAYSCALE)
-    image_height = skel_img.shape[0]
-    wall_paths = extract_wall_paths(skeleton_image_path)
+    image_height, segments = load_wall_segments(skeleton_image_path)
 
-    for i, wpath in enumerate(wall_paths):
-        if len(wpath) < 2:
-            continue
-
-        blender_path = pixel_to_blender_coords(wpath, image_height, scale_factor)
+    for i, (x1, y1, x2, y2) in enumerate(segments):
+        blender_path = pixel_to_blender_coords([(x1, y1), (x2, y2)], image_height, scale_factor)
 
         curve_data = bpy.data.curves.new(f"WallCurve_{i + 1:03d}", "CURVE")
         curve_data.dimensions = "3D"
@@ -193,3 +194,7 @@ def create_walls_with_curves(skeleton_image_path, wall_height=3.0, wall_thicknes
         curve_data.bevel_depth = wall_thickness / 2
         curve_data.bevel_resolution = 2
         curve_data.extrude = wall_height
+
+
+if __name__ == "__main__":
+    create_walls_from_skeleton(skel_path, wall_height=3.0, wall_thickness=0.2, scale_factor=0.05)
