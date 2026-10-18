@@ -16,13 +16,7 @@ def create_mask(image_path: str, out_path: str = "mask.png") -> str:
         raise FileNotFoundError(f"Could not read image: {image_path}")
 
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-    height, width = gray.shape
-
-    mask = np.zeros((height, width), dtype=np.uint8)
-    for y in range(height):
-        for x in range(width):
-            if gray[y, x] < DARK_THRESHOLD:
-                mask[y, x] = 255
+    mask = np.where(gray < DARK_THRESHOLD, 255, 0).astype(np.uint8)
 
     cv2.imwrite(out_path, mask)
     return out_path
