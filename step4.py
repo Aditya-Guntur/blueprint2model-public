@@ -13,6 +13,7 @@ short Hough segments. This stage:
    overlapping/adjacent intervals in each bucket into a single wall.
 """
 
+import json
 import math
 import os
 
@@ -60,21 +61,46 @@ def extract_and_merge_segments(skel_path: str, out_path: str = "extended_paralle
         cv2.line(overlay, (x1, y1), (x2, y2), (0, 0, 255), 1)
 
     cv2.imwrite(os.path.join(out_dir, "step4_hough_lines.png"), hough_img)
-    cv2.imwrite(os.path.join(out_dir, "step4_extended_overlay.png"), overlay)
     print(f"Extended {len(extended)} lines by {EXT_PIXELS}px at each end")
 
     horiz, vert = _classify_segments(extended)
     h_merged = _bucket_merge(horiz, BUCKET_TOL, GAP_TOL_PX)
     v_merged = _bucket_merge(vert, BUCKET_TOL, GAP_TOL_PX)
 
+    final_segments = []
     for ymid, x0, x1 in h_merged:
         y = int(round(ymid))
-        cv2.line(overlay, (int(round(x0)), y), (int(round(x1)), y), (0, 255, 0), 2)
+        final_segments.append((int(round(x0)), y, int(round(x1)), y))
     for xmid, y0, y1 in v_merged:
         x = int(round(xmid))
-        cv2.line(overlay, (x, int(round(y0))), (x, int(round(y1))), (0, 255, 0), 2)
+        final_segments.append((x, int(round(y0)), x, int(round(y1))))
 
-    cv2.imwrite(out_path, overlay)
+    # overlay is a *debug visualization only* - raw extended Hough lines in
+    # red, the final merged axis-aligned walls in green, over the skeleton.
+    # It is never read back in by a later stage.
+    for x1, y1, x2, y2 in final_segments:
+        cv2.line(overlay, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    cv2.imwrite(os.path.join(out_dir, "step4_extended_overlay.png"), overlay)
+
+    # out_path is the actual data product stage 5 re-skeletonizes: ONLY the
+    # merged axis-aligned walls, nothing else. Saving `overlay` here instead
+    # (as an earlier version of this function did) silently fed the red
+    # debug lines - diagonals included, since those are only dropped by
+    # _classify_segments for the merge step, not for the overlay - into
+    # stage 5/6, which is exactly how a stray diagonal wall ended up in the
+    # final 3D model despite every 2D image in this pipeline looking clean.
+    merged_mask = np.zeros_like(skel)
+    for x1, y1, x2, y2 in final_segments:
+        cv2.line(merged_mask, (x1, y1), (x2, y2), 255, 2)
+    cv2.imwrite(out_path, merged_mask)
+
+    # wall_segments.json carries the exact merged-wall vectors through to
+    # stage 6 directly, as data - see step6.py's docstring for why that
+    # replaces re-deriving wall paths from the raster skeleton.
+    segments_path = os.path.join(out_dir, "wall_segments.json")
+    with open(segments_path, "w", encoding="utf-8") as f:
+        json.dump({"image_height": int(skel.shape[0]), "segments": final_segments}, f)
+
     return out_path
 
 
