@@ -46,3 +46,13 @@ def extract_wall_paths(skeleton_image_path):
         if len(points) > 1:
             wall_paths.append(points)
     return wall_paths
+
+
+def pixel_to_blender_coords(pixel_coords, image_height, scale_factor=0.1):
+    """Map (x, y) pixel coordinates to (x, y, z) Blender world coordinates."""
+    blender_coords = []
+    for x, y in pixel_coords:
+        blender_x = x * scale_factor
+        blender_y = (image_height - y) * scale_factor  # flip Y: image grows down, Blender grows up
+        blender_coords.append((blender_x, blender_y, 0))
+    return blender_coords
